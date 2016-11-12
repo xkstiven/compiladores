@@ -123,7 +123,10 @@ class SymbolTable(object):
                 self.symtab = {}
                 self.parent = parent
                 if self.parent != None:
-                        self.parent.children.append(self)
+                        if hasattr(self.parent,"children"):
+                            self.parent.children.append(self)
+                        else:
+                            self.parent.children=[self]
                 self.children = []
 
         def add(self, a, v):
@@ -149,8 +152,11 @@ class SymbolTable(object):
                                 return self.parent.lookup(a)
                         else:
                                 return None
+        def __repr__(self):
+            return '%r' % self.symtab
 
 class CheckProgramVisitor(NodeVisitor):
+        types=[gotype.boolean_type, gotype.float_type.gotype.int_type,gotyoe.string_type]
         '''
         Clase de Revisión de programa.  Esta clase usa el patrón cisitor
         como está descrito en mpasast.py.  Es necesario definir métodos de
@@ -162,7 +168,8 @@ class CheckProgramVisitor(NodeVisitor):
         '''
         def __init__(self):
                 # Inicializa la tabla de simbolos
-                pass
+                self.current = SymbolTable()   #para el nodo actual se crea una tabla de simbolos
+                self.symtab = self.current   #
 
         def push_symtab(self, node):
                 self.current = SymbolTable(self.current)
@@ -172,17 +179,18 @@ class CheckProgramVisitor(NodeVisitor):
                 self.current = self.current.parent
 
         def visit_Program(self,node):
-
+                self.current=node
                 self.push_symtab(node)
                 # Agrega nombre de tipos incorporados ((int, float, string) a la  tabla de simbolos
-                node.symtab.add("int",gotype.int_type)
-                node.symtab.add("float",gotype.float_type)
-                node.symtab.add("string",gotype.string_type)
-                node.symtab.add("bool",mpastype.boolean_type) # cambiar a go
+                node.current.add("int",gotype.int_type)
+                node.current.add("float",gotype.float_type)
+                node.current.add("string",gotype.string_type)
+                node.current.add("bool",mpastype.boolean_type) # cambiar a go
 
                 # 1. Visita todas las declaraciones (statements)
                 # 2. Registra la tabla de simbolos asociada
                 self.visit(node.program)
+                #self.printTable(node)   muestra la tabla de simbolos al final de visitar todos lo nodos
 
         def visit_IfStatement(self, node):
                 self.visit(node.condition)
@@ -214,11 +222,12 @@ class CheckProgramVisitor(NodeVisitor):
                 # 3. Asigne el tipo resultante
                 self.visit(node.left)
                 self.visit(node.right)
-                node.type = node.left.type
+                if node.left.type != node.right.type:
+                    error(node.lineno,"ERROR: la operacion no es valida para estos tipos de datos")
 
         def visit_AssignmentStatement(self,node):
                 # 1. Asegúrese que la localización de la asignación está definida
-                sym = self.symtab.lookup(node.location)
+                sym = self.symtab.lookup(str(node.location))
                 assert sym, "Asignado a un sym desconocido"
                 # 2. Revise que la asignación es permitida, pe. sym no es una constante
                 # 3. Revise que los tipos coincidan.
@@ -237,50 +246,57 @@ class CheckProgramVisitor(NodeVisitor):
 
         def visit_VarDeclaration(self,node):
                 # 1. Revise que el nombre de la variable no se ha definido
-                if self.symtab.lookup(node.id):
+                if self.current.lookup(node.id):
                         error(node.lineno, "Símbol %s ya definido" % node.id)
                 # 2. Agrege la entrada a la tabla de símbolos
                 else:
                         self.symtab.add(node.id, node)
-                # 2. Revise que el tipo de la expresión (si lo hay) es el mismo
+                # 3. Revise que el tipo de la expresión (si lo hay) es el mismo
                 if node.value:
                         self.visit(node.value)
                         assert(node.typename == node.value.type.name)
                 # 4. Si no hay expresión, establecer un valor inicial para el valor
                 else:
                         node.value = None
-                node.type = self.symtab.lookup(node.typename)
+                node.type = self.current.lookup(node.typename)
                 assert(node.type)
 
         def visit_Typename(self,node):
                 # 1. Revisar que el nombre de tipo es válido que es actualmente un tipo
-                pass
+                if(node.type not in types):
+                    error(node.lineno,"ERROR: tipo de dato invalido")
+                else:
+                    self.visit(node.type)
 
         def visit_Location(self,node):
                 # 1. Revisar que la localización es una variable válida o un valor constante
                 # 2. Asigne el tipo de la localización al nodo
-                pass
+                if(self.current.lookup(node.location) not in types):
+                    error(node.lineno,"ERROR: error tipo de dato invalido")
+                else:
+                    node.type= self.current.lookup(node.id) #comrobar cristian no se que va dentro de id
 
         def visit_LoadLocation(self,node):
                 # 1. Revisar que loa localización cargada es válida.
                 # 2. Asignar el tipo apropiado
-                sym = self.symtab.lookup(node.name)
+                sym = self.current.lookup(node.name)
                 assert(sym)
                 node.type = sym.type
 
         def visit_Literal(self,node):
                 # Adjunte un tipo apropiado a la constante
-                if isinstance(node.value, types.BooleanType):
-                        node.type = self.symtab.lookup("bool")
+                if isinstance(node.value, types.BooleanType):  #el orden importa
+                        node.type = self.current.lookup("bool")
                 elif isinstance(node.value, types.IntType):
-                        node.type = self.symtab.lookup("int")
+                        node.type = self.current.lookup("int")
                 elif isinstance(node.value, types.FloatType):
-                        node.type = self.symtab.lookup("float")
+                        node.type = self.current.lookup("float")
                 elif isinstance(node.value, types.StringTypes):
-                        node.type = self.symtab.lookup("string")
+                        node.type = self.current.lookup("string")
 
         def visit_PrintStatement(self, node):
                 self.visit(node.expr)
+                node.type=self.current.lookup(node.expr.type)
 
         def visit_Extern(self, node):
                 # obtener el tipo retornado
@@ -289,16 +305,19 @@ class CheckProgramVisitor(NodeVisitor):
 
         def visit_FuncPrototype(self, node):
                 #print('foooooo')
+                node.type = self.current.lookup(node.typename)
                 if self.symtab.lookup(node.id):
                         error(node.lineno, "Símbol %s ya definido" % node.id)
+                else:
+                    self.current.add(node.id,node.type)
                 self.visit(node.params)
-                node.type = self.symtab.lookup(node.typename)
 
         def visit_Parameters(self, node):
                 for p in node.param_decls:
                         self.visit(p)
 
         def visit_ParamDecl(self, node):
+                self.current.add(node.id,self.current.lookup(node.typename))
                 node.type = self.symtab.lookup(node.typename)
 
         def visit_Group(self, node):
@@ -315,11 +334,25 @@ class CheckProgramVisitor(NodeVisitor):
                 node.type = self.symtab.lookup('bool')
 
         def visit_FunCall(self, node):
-                pass
+                if not self.current.lookup(node.id):
+                    error(node.lineno,"ERROR: la funcion no existe")
+                else:
+                    self.visit(node.params)
+                    node.type = node.id
         def visit_ExprList(self, node):
-                pass
+                for exp in node.expressions:
+                    self.visit(exp)
         def visit_Empty(self, node):
                 pass
+
+#nuevos
+        def visit_Func_declaration(self.node):
+            node.type = self.current.lookup(node.func_prototype.typename)
+            if self.current.lookup(node.func_prototype.id):
+                error(node.lineno,"ERROR: %s funcion ya definida" % node.func_prototype.id)
+            else:
+                self.current.add(node.func_prototype.id, node.type)
+            self.visit(node.body)
 
 # ----------------------------------------------------------------------
 #                       NO MODIFICAR NADA DE LO DE ABAJO
